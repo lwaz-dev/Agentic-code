@@ -1,0 +1,198 @@
+Metadata-Version: 2.4
+Name: agentic-code
+Version: 0.1.0
+Summary: An autonomous AI coding agent for your terminal.
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: openai>=1.40
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: rich>=13.7
+Requires-Dist: pydantic>=2.6
+Requires-Dist: prompt-toolkit>=3.0.43
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Dynamic: license-file
+
+# Agentic Code
+
+An autonomous AI coding agent for your terminal.
+
+Agentic Code runs entirely on your machine. You chat with a model in your terminal and it inspects, creates, edits, debugs, tests and runs code inside a project folder you choose. No login, no website, no database. It is inspired by the workflow of tools like Claude Code, but it is its own implementation.
+
+```
+╭──────────────────────────────────────────────────╮
+│                  AGENTIC CODE                    │
+│            Autonomous AI coding agent            │
+╰──────────────────────────────────────────────────╯
+❯ build a PHP contact form with MySQL
+
+● list_files
+● read_file  └─ config/database.php
+● write_file └─ contact.php
+● run_command └─ php -l contact.php   ✓ exit 0
+
+✓ Task completed
+```
+
+## Requirements
+
+- Python 3.11+
+- An [OpenRouter](https://openrouter.ai) API key
+- Optional: Git (for the git tools), PHP/Node/etc. for whatever your project uses
+
+Windows (PowerShell, CMD, Windows Terminal), macOS and Linux are supported.
+
+## Installation
+
+```bash
+git clone <your-repo-url> agentic-code
+cd agentic-code
+pip install -r requirements.txt     # just the dependencies
+pip install -e .                    # installs the `agentic` command
+```
+
+Without installing: `python main.py [project_path]`.
+
+## API key and model
+
+Create a `.env` file (see `.env.example`) in your project folder **or** in `~/.agentic/.env` (recommended: it works for every project and never ends up in a repo):
+
+```env
+OPENROUTER_API_KEY=your_key
+AGENTIC_MODEL=openai/gpt-oss-20b:free
+```
+
+The model is never hard-coded: change it with `AGENTIC_MODEL`, `--model`, `/model <id>` (this session) or `/config set model <id>` (saved). Pick a model that supports **tool calling**; agentic behaviour depends on it. Free models can be rate limited or removed, so if you get "model not found" use `/models` to see what is available.
+
+## Usage
+
+```bash
+agentic                      # use the current directory as the project
+agentic /path/to/project     # use another directory
+agentic -p "add tests"       # run one task non-interactively
+agentic --mode review --approval strict
+```
+
+Type tasks naturally. Enter sends, Alt+Enter (or a trailing `\`) adds a new line, Ctrl+C stops the agent without crashing, Ctrl+D quits.
+
+### Modes
+
+| Mode | Behaviour |
+|---|---|
+| `code` (default) | Inspect, modify, run and validate code |
+| `chat` | Plain assistant, no tools |
+| `plan` | Read-only; produces an implementation plan |
+| `review` | Read-only review; only safe read-only commands may run |
+| `auto` | Maximum autonomy; dangerous actions still ask |
+
+### Slash commands
+
+`/help` `/status` `/mode` `/model` `/models` `/project` `/files` `/diff` `/history` `/compact` `/reset` `/clear` `/config` `/init` `/doctor` `/exit` `/quit`
+
+- `/init` creates `.agentic/project.md`, `.agentic/rules.md` and `.agentic/config.json`.
+- `/diff` shows what changed this session (falls back to `git diff`).
+- `/doctor` checks Python, API key, provider connection, model, project access, Git and terminal.
+
+## Configuration
+
+Precedence (lowest to highest): defaults, `~/.agentic/.env`, project `.env`, `.agentic/config.json`, environment variables, command-line flags.
+
+```json
+{
+    "model": "openai/gpt-oss-20b:free",
+    "approval_mode": "normal",
+    "max_iterations": 30,
+    "stream": true
+}
+```
+
+Other settings: `mode`, `base_url`, `command_timeout`, `shell`, `debug`. Environment variables: `AGENTIC_MODEL`, `AGENTIC_APPROVAL_MODE`, `AGENTIC_MODE`, `AGENTIC_MAX_ITERATIONS`, `AGENTIC_STREAM`, `AGENTIC_DEBUG`, `AGENTIC_SHELL`, `AGENTIC_BASE_URL`. The API key is never written to `config.json`.
+
+### Project rules
+
+Put instructions in `.agentic/rules.md` and the agent follows them:
+
+```markdown
+# Project Rules
+Use PHP 8.2. Use PDO with prepared statements. Keep API endpoints inside /api.
+```
+
+## Tools and permissions
+
+| Tool | Level | Notes |
+|---|---|---|
+| `list_files`, `read_file`, `search_files`, `project_info`, `update_plan` | read | Respects `.gitignore`; hides `.git`, `.env`, `node_modules`, `vendor`, caches |
+| `git_status`, `git_diff`, `git_log`, `git_branch` | read | |
+| `write_file`, `edit_file` | write | Edits are exact-match replacements; the file must be read first and unchanged since |
+| `delete_file` | write | Always asks |
+| `run_command` | exec | Runs in the project root; classified SAFE / MODERATE / DANGEROUS |
+| `git_add`, `git_checkout`, `git_commit` | git_write | Ask by default; commits always ask |
+
+Approval modes (`approval_mode`):
+
+| | `strict` | `normal` (default) | `auto` |
+|---|---|---|---|
+| SAFE commands (`ls`, `git status`, `php -l`, tests) | ask | run | run |
+| MODERATE (`npm install`, `pip install`, `git checkout`) | ask | ask | run |
+| DANGEROUS (`rm -rf`, `del /s`, `format`, `shutdown`, `git push`, ...) | ask | ask | **ask** |
+| New file / edit | ask | run | run |
+| Overwrite existing file | ask | ask | run |
+| Delete file | ask | ask | **ask** |
+
+## Security
+
+- **Project root confinement:** every path is resolved (including symlinks) and rejected if it escapes the project. Changing root requires `/project <path>`.
+- **Validated tool calls:** unknown tools, malformed JSON, wrong types and missing parameters are rejected and reported back to the model so it can recover.
+- **Secrets:** `.env`, private keys and similar files cannot be read. API keys, tokens, passwords, connection strings and private-key blocks are redacted from file reads, search results, command output and logs. Your API key is not passed to commands the agent runs.
+- **Bounded output:** file reads, search results, command output and tool results are truncated with a visible note; context is summarised when it grows.
+- **Loop protection:** `max_iterations` (default 30); Ctrl+C stops safely.
+- **Safe writes:** atomic writes, CRLF preserved, no stray temp files, `.git/` is never written, original content of each changed file is kept in memory for `/diff`.
+
+Be aware: command classification is a **heuristic guard, not a sandbox**. A model can still do harm with a command the classifier considers moderate. Use `strict` mode in projects you care about and keep backups or use Git. Content the agent reads is sent to your model provider.
+
+## Architecture
+
+```
+agentic/
+  agent.py        facade: wires everything together
+  loop.py         the agent loop (model -> tools -> observe -> repeat -> validate)
+  context.py      conversation history + summarisation of old turns
+  prompts.py      system prompt
+  planner.py      visible action plan (update_plan tool)
+  permissions.py  command risk classification + approval policy
+  redact.py       secret redaction
+  config.py       configuration
+  commands.py     slash commands
+  providers/      LLMProvider interface + OpenRouter implementation
+  tools/          registry (schemas, validation) + filesystem, search, terminal, git, project
+  ui/             Rich renderer, streaming terminal UI, prompt-toolkit input, status/doctor
+```
+
+To add a provider (OpenAI, Anthropic, Ollama, ...) subclass `LLMProvider`, implement `chat()`, and register it in `providers/__init__.py`. To add a tool, create a `Tool(name, description, json_schema, handler, permission)` and register it in `tools/__init__.py`.
+
+## Development and testing
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+Tests use temporary directories and a scripted fake provider, so they never touch your real projects or the network. `AGENTIC_DEBUG=true` (or `--debug`) writes a redacted log to `.agentic/logs/agentic.log`; add that folder to `.gitignore`.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `OPENROUTER_API_KEY is not set` | Add it to `~/.agentic/.env` or your project `.env`, restart, run `/doctor` |
+| Authentication failed | The key is wrong or revoked |
+| Model not found / rate limited | `/models`, then `/model <id>`; free models change often |
+| Model replies but never uses tools | Choose a model with tool/function-calling support |
+| Garbled symbols on Windows | Use Windows Terminal; Agentic Code switches output to UTF-8 |
+| Command uses wrong shell syntax | Set `AGENTIC_SHELL=powershell` (or `cmd`, `bash`) |
+| Agent stops at the iteration limit | Raise `max_iterations`, or split the task |
+
+## License
+
+MIT
